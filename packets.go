@@ -551,6 +551,21 @@ func (mc *mysqlConn) handleErrorPacket(data []byte) error {
 	// Error Number [16 bit uint]
 	errno := binary.LittleEndian.Uint16(data[1:3])
 
+	// 1792: ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION
+	if errno == 1792 && mc.cfg.RejectReadOnly {
+		// Oops; we are connected to a read-only connection, and won't be able
+		// to issue any write statements. Since RejectReadOnly is configured,
+		// we throw away this connection hoping this one would have write
+		// permission. This is specifically for a possible race condition
+		// during failover (e.g. on AWS Aurora). See README.md for more.
+		//
+		// We explicitly close the connection before returning
+		// driver.ErrBadConn to ensure that `database/sql` purges this
+		// connection and initiates a new one for next statement next time.
+		mc.Close()
+		return driver.ErrBadConn
+	}
+
 	pos := 3
 
 	// SQL State [optional: # + 5bytes string]
@@ -591,10 +606,12 @@ func (mc *mysqlConn) handleOkPacket(data []byte) error {
 
 	// warning count [2 bytes]
 	if !mc.strict {
+		mc.warningCount = 0
 		return nil
 	}
 
 	pos := 1 + n + m + 2
+	mc.warningCount = binary.LittleEndian.Uint16(data[pos : pos+2])
 	if binary.LittleEndian.Uint16(data[pos:pos+2]) > 0 {
 		return mc.getWarnings()
 	}
@@ -714,7 +731,14 @@ func (rows *textRows) readRow(dest []driver.Value) error {
 		rows.mc.status = readStatus(data[3:])
 		rows.rs.done = true
 		if !rows.HasNextResultSet() {
+			mc := rows.mc
 			rows.mc = nil
+
+			if mc.strict && mc.warningCount > 0 {
+				if err := mc.getWarnings(); err != nil {
+					return err
+				}
+			}
 		}
 		return io.EOF
 	}
@@ -1099,6 +1123,9 @@ func (mc *mysqlConn) discardResults() error {
 				return err
 			}
 		}
+	}
+	if mc.strict && mc.warningCount > 0 {
+		return mc.getWarnings()
 	}
 	return nil
 }

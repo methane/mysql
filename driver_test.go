@@ -95,6 +95,7 @@ func runTestsWithMultiStatement(t *testing.T, dsn string, tests ...func(dbt *DBT
 	for _, test := range tests {
 		test(dbt)
 		dbt.db.Exec("DROP TABLE IF EXISTS test")
+		dbt.db.Exec("DROP TABLE IF EXISTS test2")
 	}
 }
 
@@ -110,6 +111,7 @@ func runTests(t *testing.T, dsn string, tests ...func(dbt *DBTest)) {
 	defer db.Close()
 
 	db.Exec("DROP TABLE IF EXISTS test")
+	db.Exec("DROP TABLE IF EXISTS test2")
 
 	dsn2 := dsn + "&interpolateParams=true"
 	var db2 *sql.DB
@@ -137,13 +139,16 @@ func runTests(t *testing.T, dsn string, tests ...func(dbt *DBTest)) {
 	for _, test := range tests {
 		test(dbt)
 		dbt.db.Exec("DROP TABLE IF EXISTS test")
+		dbt.db.Exec("DROP TABLE IF EXISTS test2")
 		if db2 != nil {
 			test(dbt2)
 			dbt2.db.Exec("DROP TABLE IF EXISTS test")
+			dbt2.db.Exec("DROP TABLE IF EXISTS test2")
 		}
 		if db3 != nil {
 			test(dbt3)
 			dbt3.db.Exec("DROP TABLE IF EXISTS test")
+			dbt3.db.Exec("DROP TABLE IF EXISTS test2")
 		}
 	}
 }
@@ -442,6 +447,14 @@ func TestFloat64Placeholder(t *testing.T) {
 			}
 			dbt.mustExec("DROP TABLE IF EXISTS test")
 		}
+	})
+}
+
+func TestMultiStatementStrict(t *testing.T) {
+	runTestsWithMultiStatement(t, dsn, func(dbt *DBTest) {
+		dbt.mustExec("CREATE TABLE test (id INT(11) UNSIGNED NOT NULL, PRIMARY KEY (id))")
+		dbt.mustExec("CREATE TABLE test2 (id INT(11) UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY (id))")
+		dbt.mustExec("INSERT INTO test VALUES (256); INSERT INTO test2 VALUES (256)")
 	})
 }
 

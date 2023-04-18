@@ -14,8 +14,10 @@ import (
 	"time"
 )
 
-const defaultBufSize = 4096
-const maxCachedBufSize = 256 * 1024
+// Same to official MySQL client.
+// https://dev.mysql.com/doc/refman/8.0/en/mysql-command-options.html#option_mysql_net-buffer-length
+const defaultBufSize = 16*1024
+const maxCachedBufSize = 256*1024
 
 // A buffer which is used for both reading and writing.
 // This is possible since communication on each connection is synchronous.

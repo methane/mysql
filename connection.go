@@ -103,13 +103,21 @@ func (mc *mysqlConn) syncSequence() {
 }
 
 // Handles parameters set in DSN after the connection is established
-func (mc *mysqlConn) handleParams() (err error) {
+func (mc *mysqlConn) handleParams() error {
+	cmdSet := mc.cfg.setParamsCommand()
+	if cmdSet == "" {
+		return nil
+	}
+	return mc.exec(cmdSet)
+}
+
+func (cfg *Config) setParamsCommand() string {
 	var cmdSet strings.Builder
 
-	for param, val := range mc.cfg.Params {
+	writeParam := func(param, val string) {
 		if cmdSet.Len() == 0 {
 			// Heuristic: 29 chars for each other key=value to reduce reallocations
-			cmdSet.Grow(4 + len(param) + 3 + len(val) + 30*(len(mc.cfg.Params)-1))
+			cmdSet.Grow(4 + len(param) + 3 + len(val) + 30*(len(cfg.Params)-1))
 			cmdSet.WriteString("SET ")
 		} else {
 			cmdSet.WriteString(", ")
@@ -119,11 +127,32 @@ func (mc *mysqlConn) handleParams() (err error) {
 		cmdSet.WriteString(val)
 	}
 
-	if cmdSet.Len() > 0 {
-		err = mc.exec(cmdSet.String())
+	if len(cfg.paramOrder) == 0 {
+		// Config.Params is a map, so manually constructed Config values retain
+		// their existing unspecified iteration order.
+		for param, val := range cfg.Params {
+			writeParam(param, val)
+		}
+		return cmdSet.String()
 	}
 
-	return
+	seen := make(map[string]struct{}, len(cfg.paramOrder))
+	for _, param := range cfg.paramOrder {
+		if val, ok := cfg.Params[param]; ok {
+			writeParam(param, val)
+			seen[param] = struct{}{}
+		}
+	}
+
+	// Params can be modified after parsing a DSN. Apply newly added parameters
+	// after the parameters whose order was recorded by ParseDSN.
+	for param, val := range cfg.Params {
+		if _, ok := seen[param]; !ok {
+			writeParam(param, val)
+		}
+	}
+
+	return cmdSet.String()
 }
 
 // markBadConn replaces errBadConnNoWrite with driver.ErrBadConn.

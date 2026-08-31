@@ -22,13 +22,13 @@ var testDSNs = []struct {
 	out *Config
 }{{
 	"username:password@protocol(address)/dbname?param=value",
-	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true},
+	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, paramOrder: []string{"param"}},
 }, {
 	"username:password@protocol(address)/dbname?param=value&columnsWithAlias=true",
-	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, ColumnsWithAlias: true},
+	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, ColumnsWithAlias: true, paramOrder: []string{"param"}},
 }, {
 	"username:password@protocol(address)/dbname?param=value&columnsWithAlias=true&multiStatements=true",
-	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, ColumnsWithAlias: true, MultiStatements: true},
+	&Config{User: "username", Passwd: "password", Net: "protocol", Addr: "address", DBName: "dbname", Params: map[string]string{"param": "value"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, ColumnsWithAlias: true, MultiStatements: true, paramOrder: []string{"param"}},
 }, {
 	"user@unix(/path/to/socket)/dbname?charset=utf8",
 	&Config{User: "user", Net: "unix", Addr: "/path/to/socket", DBName: "dbname", charsets: []string{"utf8"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true},
@@ -67,7 +67,7 @@ var testDSNs = []struct {
 	&Config{User: "user", Passwd: "p@/ssword", Net: "tcp", Addr: "127.0.0.1:3306", Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true},
 }, {
 	"unix/?arg=%2Fsome%2Fpath.ext",
-	&Config{Net: "unix", Addr: "/tmp/mysql.sock", Params: map[string]string{"arg": "/some/path.ext"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true},
+	&Config{Net: "unix", Addr: "/tmp/mysql.sock", Params: map[string]string{"arg": "/some/path.ext"}, Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true, paramOrder: []string{"arg"}},
 }, {
 	"tcp(127.0.0.1)/dbname",
 	&Config{Net: "tcp", Addr: "127.0.0.1:3306", DBName: "dbname", Loc: time.UTC, MaxAllowedPacket: defaultMaxAllowedPacket, Logger: defaultLogger, AllowNativePasswords: true, CheckConnLiveness: true},
@@ -382,6 +382,31 @@ func TestParamsAreSorted(t *testing.T) {
 	}
 }
 
+func TestDSNParamOrder(t *testing.T) {
+	dsn := "/?aurora_read_replica_read_committed=1&transaction_isolation=%27READ-COMMITTED%27"
+	cfg, err := ParseDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "SET aurora_read_replica_read_committed = 1, transaction_isolation = 'READ-COMMITTED'"
+	if got := cfg.setParamsCommand(); got != want {
+		t.Fatalf("setParamsCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestDuplicateDSNParamOrder(t *testing.T) {
+	cfg, err := ParseDSN("/?first=old&second=2&first=new")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "SET second = 2, first = new"
+	if got := cfg.setParamsCommand(); got != want {
+		t.Fatalf("setParamsCommand() = %q, want %q", got, want)
+	}
+}
+
 func TestCloneConfig(t *testing.T) {
 	RegisterServerPubKey("testKey", testPubKeyRSA)
 	defer DeregisterServerPubKey("testKey")
@@ -415,6 +440,11 @@ func TestCloneConfig(t *testing.T) {
 
 	if _, ok := cfg.Params["foobar"]; !ok {
 		t.Errorf("custom params in cloned Config should not propagate to original Config")
+	}
+
+	cfg2.paramOrder[0] = "changed"
+	if cfg.paramOrder[0] == cfg2.paramOrder[0] {
+		t.Errorf("param order in cloned Config should not propagate to original Config")
 	}
 
 	if !reflect.DeepEqual(cfg.pubKey, cfg2.pubKey) {

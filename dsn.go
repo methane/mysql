@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ type Config struct {
 	compress bool // Enable zlib compression
 
 	beforeConnect func(context.Context, *Config) error // Invoked before a connection is established
+	paramOrder    []string                             // Order of connection parameters parsed from the DSN
 	pubKey        *rsa.PublicKey                       // Server public key
 	timeTruncate  time.Duration                        // Truncate time.Time values to the specified duration
 	charsets      []string                             // Connection charset. When set, this will be set in SET NAMES <charset> query
@@ -160,6 +162,7 @@ func (cfg *Config) Clone() *Config {
 		cp.Params = make(map[string]string, len(cfg.Params))
 		maps.Copy(cp.Params, cfg.Params)
 	}
+	cp.paramOrder = slices.Clone(cfg.paramOrder)
 	if cfg.pubKey != nil {
 		cp.pubKey = &rsa.PublicKey{
 			N: new(big.Int).Set(cfg.pubKey.N),
@@ -684,14 +687,23 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 			cfg.ConnectionAttributes = connectionAttributes
 
 		default:
+			value, err = url.QueryUnescape(value)
+			if err != nil {
+				return
+			}
+
 			// lazy init
 			if cfg.Params == nil {
 				cfg.Params = make(map[string]string)
 			}
 
-			if cfg.Params[key], err = url.QueryUnescape(value); err != nil {
-				return
+			// Keep the last occurrence of a duplicate parameter, matching the
+			// existing map semantics, and place it at its last position.
+			if i := slices.Index(cfg.paramOrder, key); i >= 0 {
+				cfg.paramOrder = slices.Delete(cfg.paramOrder, i, i+1)
 			}
+			cfg.Params[key] = value
+			cfg.paramOrder = append(cfg.paramOrder, key)
 		}
 	}
 

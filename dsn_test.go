@@ -382,6 +382,48 @@ func TestParamsAreSorted(t *testing.T) {
 	}
 }
 
+func TestFormatDSNPreservesParamOrder(t *testing.T) {
+	dsn := "/dbname?second=2&first=1"
+	cfg, err := ParseDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "tcp(127.0.0.1:3306)" + dsn
+	if got := cfg.FormatDSN(); got != want {
+		t.Fatalf("FormatDSN() = %q, want %q", got, want)
+	}
+}
+
+func TestAddParam(t *testing.T) {
+	cfg := NewConfig()
+	if err := cfg.Apply(
+		AddParam("second", "2"),
+		AddParam("first", "1"),
+		AddParam("second", "new"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := cfg.FormatDSN(), "/?first=1&second=new"; got != want {
+		t.Fatalf("FormatDSN() = %q, want %q", got, want)
+	}
+	if got, want := cfg.setParamsCommand(), "SET first = 1, second = new"; got != want {
+		t.Fatalf("setParamsCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestAddParamAfterDirectParams(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Params = map[string]string{"second": "2", "first": "1"}
+	if err := cfg.Apply(AddParam("third", "3")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := cfg.FormatDSN(), "/?first=1&second=2&third=3"; got != want {
+		t.Fatalf("FormatDSN() = %q, want %q", got, want)
+	}
+}
+
 func TestDSNParamOrder(t *testing.T) {
 	dsn := "/?aurora_read_replica_read_committed=1&transaction_isolation=%27READ-COMMITTED%27"
 	cfg, err := ParseDSN(dsn)
@@ -404,6 +446,9 @@ func TestDuplicateDSNParamOrder(t *testing.T) {
 	want := "SET second = 2, first = new"
 	if got := cfg.setParamsCommand(); got != want {
 		t.Fatalf("setParamsCommand() = %q, want %q", got, want)
+	}
+	if got, want := cfg.FormatDSN(), "tcp(127.0.0.1:3306)/?second=2&first=new"; got != want {
+		t.Fatalf("FormatDSN() = %q, want %q", got, want)
 	}
 }
 

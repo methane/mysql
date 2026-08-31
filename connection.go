@@ -127,29 +127,8 @@ func (cfg *Config) setParamsCommand() string {
 		cmdSet.WriteString(val)
 	}
 
-	if len(cfg.paramOrder) == 0 {
-		// Config.Params is a map, so manually constructed Config values retain
-		// their existing unspecified iteration order.
-		for param, val := range cfg.Params {
-			writeParam(param, val)
-		}
-		return cmdSet.String()
-	}
-
-	seen := make(map[string]struct{}, len(cfg.paramOrder))
-	for _, param := range cfg.paramOrder {
-		if val, ok := cfg.Params[param]; ok {
-			writeParam(param, val)
-			seen[param] = struct{}{}
-		}
-	}
-
-	// Params can be modified after parsing a DSN. Apply newly added parameters
-	// after the parameters whose order was recorded by ParseDSN.
-	for param, val := range cfg.Params {
-		if _, ok := seen[param]; !ok {
-			writeParam(param, val)
-		}
+	for _, param := range cfg.orderedParams() {
+		writeParam(param, cfg.Params[param])
 	}
 
 	return cmdSet.String()

@@ -44,7 +44,7 @@ type Config struct {
 	Net                  string            // Network (e.g. "tcp", "tcp6", "unix". default: "tcp")
 	Addr                 string            // Address (default: "127.0.0.1:3306" for "tcp" and "/tmp/mysql.sock" for "unix")
 	DBName               string            // Database name
-	Params               map[string]string // Connection parameters
+	Params               map[string]string // Connection parameters. Use Apply(AddParam(...)) to preserve insertion order.
 	ConnectionAttributes string            // Connection Attributes, comma-delimited string of user-defined "key:value" pairs
 	Collation            string            // Connection collation. When set, this will be set in SET NAMES <charset> COLLATE <collation> query
 	Loc                  *time.Location    // Location for time.Time values
@@ -113,6 +113,27 @@ func (c *Config) Apply(opts ...Option) error {
 	return nil
 }
 
+// AddParam adds a connection parameter.
+//
+// Parameters added with AddParam retain their order in [Config.FormatDSN] and
+// are applied to the connection in that order. If name already exists, it is
+// moved to the end of the parameter order.
+func AddParam(name, value string) Option {
+	return func(cfg *Config) error {
+		params := cfg.orderedParams()
+		if i := slices.Index(params, name); i >= 0 {
+			params = slices.Delete(params, i, i+1)
+		}
+
+		if cfg.Params == nil {
+			cfg.Params = make(map[string]string)
+		}
+		cfg.Params[name] = value
+		cfg.paramOrder = append(params, name)
+		return nil
+	}
+}
+
 // TimeTruncate sets the time duration to truncate time.Time values in
 // query parameters.
 func TimeTruncate(d time.Duration) Option {
@@ -158,7 +179,7 @@ func (cfg *Config) Clone() *Config {
 	if cp.TLS != nil {
 		cp.TLS = cfg.TLS.Clone()
 	}
-	if len(cp.Params) > 0 {
+	if cp.Params != nil {
 		cp.Params = make(map[string]string, len(cfg.Params))
 		maps.Copy(cp.Params, cfg.Params)
 	}
@@ -387,18 +408,37 @@ func (cfg *Config) FormatDSN() string {
 	}
 
 	// other params
-	if cfg.Params != nil {
-		var params []string
-		for param := range cfg.Params {
-			params = append(params, param)
-		}
-		sort.Strings(params)
-		for _, param := range params {
-			writeDSNParam(&buf, &hasParam, param, url.QueryEscape(cfg.Params[param]))
-		}
+	for _, param := range cfg.orderedParams() {
+		writeDSNParam(&buf, &hasParam, param, url.QueryEscape(cfg.Params[param]))
 	}
 
 	return buf.String()
+}
+
+// orderedParams returns connection parameter names in their recorded order,
+// followed by any names added directly to Config.Params in sorted order.
+func (cfg *Config) orderedParams() []string {
+	params := make([]string, 0, len(cfg.Params))
+	seen := make(map[string]struct{}, len(cfg.Params))
+	for _, param := range cfg.paramOrder {
+		if _, ok := cfg.Params[param]; !ok {
+			continue
+		}
+		if _, ok := seen[param]; ok {
+			continue
+		}
+		params = append(params, param)
+		seen[param] = struct{}{}
+	}
+
+	unordered := make([]string, 0, len(cfg.Params)-len(params))
+	for param := range cfg.Params {
+		if _, ok := seen[param]; !ok {
+			unordered = append(unordered, param)
+		}
+	}
+	sort.Strings(unordered)
+	return append(params, unordered...)
 }
 
 // ParseDSN parses the DSN string to a Config

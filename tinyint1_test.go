@@ -17,26 +17,29 @@ import (
 
 func TestTinyInt1IsBoolConfig(t *testing.T) {
 	cfg := NewConfig()
-	if cfg.tinyInt1IsBool {
-		t.Fatal("tinyInt1IsBool should be disabled by default")
+	if !cfg.tinyInt1IsBool {
+		t.Fatal("tinyInt1IsBool should be enabled by default")
+	}
+	if got := cfg.FormatDSN(); strings.Contains(got, "tinyInt1IsBool") {
+		t.Fatalf("FormatDSN() = %q; default option should be omitted", got)
 	}
 
-	if err := cfg.Apply(TinyInt1IsBool(true)); err != nil {
+	if err := cfg.Apply(TinyInt1IsBool(false)); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.tinyInt1IsBool {
-		t.Fatal("TinyInt1IsBool(true) did not enable the option")
+	if cfg.tinyInt1IsBool {
+		t.Fatal("TinyInt1IsBool(false) did not disable the option")
 	}
-	if got := cfg.FormatDSN(); !strings.Contains(got, "tinyInt1IsBool=true") {
-		t.Fatalf("FormatDSN() = %q; want tinyInt1IsBool=true", got)
+	if got := cfg.FormatDSN(); !strings.Contains(got, "tinyInt1IsBool=false") {
+		t.Fatalf("FormatDSN() = %q; want tinyInt1IsBool=false", got)
 	}
 
-	cfg, err := ParseDSN("/?tinyInt1IsBool=true")
+	cfg, err := ParseDSN("/?tinyInt1IsBool=false")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.tinyInt1IsBool {
-		t.Fatal("ParseDSN did not enable tinyInt1IsBool")
+	if cfg.tinyInt1IsBool {
+		t.Fatal("ParseDSN did not disable tinyInt1IsBool")
 	}
 
 	if _, err := ParseDSN("/?tinyInt1IsBool=invalid"); err == nil {
@@ -45,7 +48,7 @@ func TestTinyInt1IsBoolConfig(t *testing.T) {
 }
 
 func TestTinyInt1IsBool(t *testing.T) {
-	runTestsParallel(t, dsn+"&tinyInt1IsBool=true", func(dbt *DBTest, tbl string) {
+	runTestsParallel(t, dsn, func(dbt *DBTest, tbl string) {
 		dbt.mustExec("CREATE TABLE " + tbl + " (" +
 			"id INT PRIMARY KEY, " +
 			"b TINYINT(1) NOT NULL, " +
@@ -110,6 +113,21 @@ func TestTinyInt1IsBool(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want[2]) {
 			dbt.Errorf("prepared statement row = %#v; want %#v", got, want[2])
+		}
+	})
+}
+
+func TestTinyInt1IsBoolDisabled(t *testing.T) {
+	runTestsParallel(t, dsn+"&tinyInt1IsBool=false", func(dbt *DBTest, tbl string) {
+		dbt.mustExec("CREATE TABLE " + tbl + " (b TINYINT(1) NOT NULL)")
+		dbt.mustExec("INSERT INTO " + tbl + " VALUES (2)")
+
+		var got any
+		if err := dbt.db.QueryRow("SELECT b FROM " + tbl).Scan(&got); err != nil {
+			dbt.Fatal(err)
+		}
+		if got != int64(2) {
+			dbt.Fatalf("Scan(&any) = %#v; want int64(2)", got)
 		}
 	})
 }

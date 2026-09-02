@@ -55,7 +55,7 @@ func TestTinyInt1IsBool(t *testing.T) {
 			"bn TINYINT(1), " +
 			"n TINYINT(2) NOT NULL, " +
 			"u TINYINT(1) UNSIGNED NOT NULL)")
-		dbt.mustExec("INSERT INTO "+tbl+" VALUES " +
+		dbt.mustExec("INSERT INTO " + tbl + " VALUES " +
 			"(1, 0, NULL, 2, 1), " +
 			"(2, 1, 0, 2, 1), " +
 			"(3, 2, -1, 2, 1)")

@@ -97,6 +97,7 @@ func NewConfig() *Config {
 		Logger:               defaultLogger,
 		AllowNativePasswords: true,
 		CheckConnLiveness:    true,
+		tinyInt1IsBool:       true,
 	}
 	return cfg
 }
@@ -364,8 +365,8 @@ func (cfg *Config) FormatDSN() string {
 		writeDSNParam(&buf, &hasParam, "timeTruncate", cfg.timeTruncate.String())
 	}
 
-	if cfg.tinyInt1IsBool {
-		writeDSNParam(&buf, &hasParam, "tinyInt1IsBool", "true")
+	if !cfg.tinyInt1IsBool {
+		writeDSNParam(&buf, &hasParam, "tinyInt1IsBool", "false")
 	}
 
 	if cfg.ReadTimeout > 0 {

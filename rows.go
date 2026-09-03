@@ -9,6 +9,7 @@
 package mysql
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"io"
 	"math"
@@ -59,7 +60,20 @@ func (rows *mysqlRows) Columns() []string {
 	return columns
 }
 
+func (rows *mysqlRows) tinyInt1IsBool(i int) bool {
+	if rows.mc == nil || !rows.mc.cfg.tinyInt1IsBool {
+		return false
+	}
+	column := rows.rs.columns[i]
+	return column.fieldType == fieldTypeTiny &&
+		column.length == 1 &&
+		column.flags&(flagUnsigned|flagZeroFill) == 0
+}
+
 func (rows *mysqlRows) ColumnTypeDatabaseTypeName(i int) string {
+	if rows.tinyInt1IsBool(i) {
+		return "BOOLEAN"
+	}
 	return rows.rs.columns[i].typeDatabaseName()
 }
 
@@ -94,7 +108,27 @@ func (rows *mysqlRows) ColumnTypePrecisionScale(i int) (int64, int64, bool) {
 }
 
 func (rows *mysqlRows) ColumnTypeScanType(i int) reflect.Type {
+	if rows.tinyInt1IsBool(i) {
+		if rows.rs.columns[i].flags&flagNotNULL != 0 {
+			return reflect.TypeFor[bool]()
+		}
+		return reflect.TypeFor[sql.NullBool]()
+	}
 	return rows.rs.columns[i].scanType()
+}
+
+func (rows *mysqlRows) convertTinyInt1ToBool(dest []driver.Value) {
+	if rows.mc == nil || !rows.mc.cfg.tinyInt1IsBool {
+		return
+	}
+	for i, v := range dest {
+		if !rows.tinyInt1IsBool(i) || v == nil {
+			continue
+		}
+		if n, ok := v.(int64); ok {
+			dest[i] = n != 0
+		}
+	}
 }
 
 func (rows *mysqlRows) Close() (err error) {
@@ -197,7 +231,11 @@ func (rows *binaryRows) Next(dest []driver.Value) error {
 		}
 
 		// Fetch next row from stream
-		return rows.readRow(dest)
+		if err := rows.readRow(dest); err != nil {
+			return err
+		}
+		rows.convertTinyInt1ToBool(dest)
+		return nil
 	}
 	return io.EOF
 }
@@ -219,7 +257,11 @@ func (rows *textRows) Next(dest []driver.Value) error {
 		}
 
 		// Fetch next row from stream
-		return rows.readRow(dest)
+		if err := rows.readRow(dest); err != nil {
+			return err
+		}
+		rows.convertTinyInt1ToBool(dest)
+		return nil
 	}
 	return io.EOF
 }

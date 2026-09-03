@@ -77,7 +77,8 @@ type Config struct {
 	// unexported fields. new options should be come here.
 	// boolean first. alphabetical order.
 
-	compress bool // Enable zlib compression
+	compress       bool // Enable zlib compression
+	tinyInt1IsBool bool // Treat signed TINYINT(1) as boolean
 
 	beforeConnect func(context.Context, *Config) error // Invoked before a connection is established
 	paramOrder    []string                             // Order of connection parameters parsed from the DSN
@@ -98,6 +99,7 @@ func NewConfig() *Config {
 		Logger:               defaultLogger,
 		AllowNativePasswords: true,
 		CheckConnLiveness:    true,
+		tinyInt1IsBool:       true,
 	}
 	return cfg
 }
@@ -155,6 +157,14 @@ func BeforeConnect(fn func(context.Context, *Config) error) Option {
 func EnableCompression(yes bool) Option {
 	return func(cfg *Config) error {
 		cfg.compress = yes
+		return nil
+	}
+}
+
+// TinyInt1IsBool controls whether signed TINYINT(1) columns are treated as boolean.
+func TinyInt1IsBool(yes bool) Option {
+	return func(cfg *Config) error {
+		cfg.tinyInt1IsBool = yes
 		return nil
 	}
 }
@@ -377,6 +387,10 @@ func (cfg *Config) FormatDSN() string {
 
 	if cfg.timeTruncate > 0 {
 		writeDSNParam(&buf, &hasParam, "timeTruncate", cfg.timeTruncate.String())
+	}
+
+	if !cfg.tinyInt1IsBool {
+		writeDSNParam(&buf, &hasParam, "tinyInt1IsBool", "false")
 	}
 
 	if cfg.ReadTimeout > 0 {
@@ -646,13 +660,6 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 				return errors.New("invalid bool value: " + value)
 			}
 
-		// time.Time truncation
-		case "timeTruncate":
-			cfg.timeTruncate, err = time.ParseDuration(value)
-			if err != nil {
-				return fmt.Errorf("invalid timeTruncate value: %v, error: %w", value, err)
-			}
-
 		// I/O read Timeout
 		case "readTimeout":
 			cfg.ReadTimeout, err = time.ParseDuration(value)
@@ -685,6 +692,21 @@ func parseDSNParams(cfg *Config, params string) (err error) {
 			cfg.Timeout, err = time.ParseDuration(value)
 			if err != nil {
 				return
+			}
+
+		// time.Time truncation
+		case "timeTruncate":
+			cfg.timeTruncate, err = time.ParseDuration(value)
+			if err != nil {
+				return fmt.Errorf("invalid timeTruncate value: %v, error: %w", value, err)
+			}
+
+		// Treat TINYINT(1) as boolean
+		case "tinyInt1IsBool":
+			var isBool bool
+			cfg.tinyInt1IsBool, isBool = readBool(value)
+			if !isBool {
+				return errors.New("invalid bool value: " + value)
 			}
 
 		// TLS-Encryption

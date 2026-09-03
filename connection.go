@@ -103,13 +103,21 @@ func (mc *mysqlConn) syncSequence() {
 }
 
 // Handles parameters set in DSN after the connection is established
-func (mc *mysqlConn) handleParams() (err error) {
+func (mc *mysqlConn) handleParams() error {
+	cmdSet := mc.cfg.setParamsCommand()
+	if cmdSet == "" {
+		return nil
+	}
+	return mc.exec(cmdSet)
+}
+
+func (cfg *Config) setParamsCommand() string {
 	var cmdSet strings.Builder
 
-	for param, val := range mc.cfg.Params {
+	writeParam := func(param, val string) {
 		if cmdSet.Len() == 0 {
 			// Heuristic: 29 chars for each other key=value to reduce reallocations
-			cmdSet.Grow(4 + len(param) + 3 + len(val) + 30*(len(mc.cfg.Params)-1))
+			cmdSet.Grow(4 + len(param) + 3 + len(val) + 30*(len(cfg.Params)-1))
 			cmdSet.WriteString("SET ")
 		} else {
 			cmdSet.WriteString(", ")
@@ -119,11 +127,11 @@ func (mc *mysqlConn) handleParams() (err error) {
 		cmdSet.WriteString(val)
 	}
 
-	if cmdSet.Len() > 0 {
-		err = mc.exec(cmdSet.String())
+	for _, param := range cfg.orderedParams() {
+		writeParam(param, cfg.Params[param])
 	}
 
-	return
+	return cmdSet.String()
 }
 
 // markBadConn replaces errBadConnNoWrite with driver.ErrBadConn.

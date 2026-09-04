@@ -84,6 +84,7 @@ type Config struct {
 	paramOrder    []string                             // Order of connection parameters parsed from the DSN
 	pubKey        *rsa.PublicKey                       // Server public key
 	timeTruncate  time.Duration                        // Truncate time.Time values to the specified duration
+	tlsServerName string                               // TLS server name automatically derived from Addr
 	charsets      []string                             // Connection charset. When set, this will be set in SET NAMES <charset> query
 }
 
@@ -246,12 +247,7 @@ func (cfg *Config) normalize() error {
 		}
 	}
 
-	if cfg.TLS != nil && cfg.TLS.ServerName == "" && !cfg.TLS.InsecureSkipVerify {
-		host, _, err := net.SplitHostPort(cfg.Addr)
-		if err == nil {
-			cfg.TLS.ServerName = host
-		}
-	}
+	cfg.normalizeTLSConfigServerName()
 
 	if cfg.ServerPubKey != "" {
 		cfg.pubKey = getServerPubKey(cfg.ServerPubKey)
@@ -265,6 +261,16 @@ func (cfg *Config) normalize() error {
 	}
 
 	return nil
+}
+
+func (cfg *Config) normalizeTLSConfigServerName() {
+	if cfg.TLS != nil && cfg.TLS.ServerName == cfg.tlsServerName && !cfg.TLS.InsecureSkipVerify {
+		host, _, err := net.SplitHostPort(cfg.Addr)
+		if err == nil {
+			cfg.TLS.ServerName = host
+			cfg.tlsServerName = host
+		}
+	}
 }
 
 func writeDSNParam(buf *bytes.Buffer, hasParam *bool, name, value string) {

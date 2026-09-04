@@ -24,22 +24,22 @@ import (
 )
 
 type mysqlConn struct {
-	buf              buffer
-	netConn          net.Conn
-	rawConn          net.Conn    // underlying connection when netConn is TLS connection.
-	result           mysqlResult // managed by clearResult() and handleOkPacket().
-	compIO           *compIO
-	cfg              *Config
-	connector        *connector
-	maxAllowedPacket int
-	maxWriteSize     int
-	capabilities     capabilityFlag
-	extCapabilities  extendedCapabilityFlag
-	status           statusFlag
-	sequence         uint8
-	compressSequence uint8
-	parseTime        bool
-	compress         bool
+	buf               buffer
+	netConn           net.Conn
+	rawConn           net.Conn    // underlying connection when netConn is TLS connection.
+	result            mysqlResult // managed by clearResult() and handleOkPacket().
+	compIO            *compIO
+	cfg               *Config
+	encodedAttributes string
+	maxAllowedPacket  int
+	maxWriteSize      int
+	capabilities      capabilityFlag
+	extCapabilities   extendedCapabilityFlag
+	status            statusFlag
+	sequence          uint8
+	compressSequence  uint8
+	parseTime         bool
+	compress          bool
 
 	// for context support (Go 1.8+)
 	watching bool

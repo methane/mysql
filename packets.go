@@ -277,7 +277,7 @@ func (mc *mysqlConn) readHandshakePacket() (data []byte, capabilities capability
 }
 
 // initCapabilities initializes the capabilities based on server support and configuration
-func (mc *mysqlConn) initCapabilities(serverCapabilities capabilityFlag, serverExtCapabilities extendedCapabilityFlag, cfg *Config) {
+func (mc *mysqlConn) initCapabilities(serverCapabilities capabilityFlag, serverExtCapabilities extendedCapabilityFlag) {
 	clientCapabilities :=
 		clientMySQL |
 			clientLongFlag |
@@ -291,10 +291,10 @@ func (mc *mysqlConn) initCapabilities(serverCapabilities capabilityFlag, serverE
 			clientConnectAttrs |
 			clientDeprecateEOF
 
-	if cfg.ClientFoundRows {
+	if mc.cfg.ClientFoundRows {
 		clientCapabilities |= clientFoundRows
 	}
-	if cfg.compress {
+	if mc.cfg.compress {
 		clientCapabilities |= clientCompress
 	}
 	// To enable TLS / SSL
@@ -305,7 +305,7 @@ func (mc *mysqlConn) initCapabilities(serverCapabilities capabilityFlag, serverE
 	if mc.cfg.MultiStatements {
 		clientCapabilities |= clientMultiStatements
 	}
-	if n := len(cfg.DBName); n > 0 {
+	if n := len(mc.cfg.DBName); n > 0 {
 		clientCapabilities |= clientConnectWithDB
 	}
 
@@ -405,9 +405,9 @@ func (mc *mysqlConn) writeHandshakeResponsePacket(authResp []byte, plugin string
 
 	// Connection Attributes
 	if mc.capabilities&clientConnectAttrs != 0 {
-		connAttrsLen := len(mc.connector.encodedAttributes)
+		connAttrsLen := len(mc.encodedAttributes)
 		data = appendLengthEncodedInteger(data, uint64(connAttrsLen))
-		data = append(data, mc.connector.encodedAttributes...)
+		data = append(data, mc.encodedAttributes...)
 	}
 
 	// Send Auth packet

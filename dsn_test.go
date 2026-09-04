@@ -241,7 +241,6 @@ func TestDSNParser(t *testing.T) {
 
 			// pointer not static
 			cfg.TLS = nil
-			cfg.tlsServerName = ""
 
 			if !reflect.DeepEqual(cfg, tst.out) {
 				t.Errorf("%d. ParseDSN(%q) mismatch:\ngot  %+v\nwant %+v", i, tst.in, cfg, tst.out)

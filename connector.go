@@ -72,7 +72,6 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		cfg.normalizeTLSConfigServerName()
 	}
 
 	// New mysqlConn

@@ -77,8 +77,9 @@ type Config struct {
 	// unexported fields. new options should be come here.
 	// boolean first. alphabetical order.
 
-	compress       bool // Enable zlib compression
-	tinyInt1IsBool bool // Treat signed TINYINT(1) as boolean
+	compress             bool // Enable zlib compression
+	tinyInt1IsBool       bool // Treat signed TINYINT(1) as boolean
+	tlsServerNameDerived bool // Whether TLS.ServerName was derived from Addr
 
 	beforeConnect     func(context.Context, *Config) error // Invoked before a connection is established
 	encodedAttributes string                               // Encoded connection attributes
@@ -247,10 +248,11 @@ func (cfg *Config) normalize() error {
 		}
 	}
 
-	if cfg.TLS != nil && cfg.TLS.ServerName == "" && !cfg.TLS.InsecureSkipVerify {
+	if cfg.TLS != nil && (cfg.TLS.ServerName == "" || cfg.tlsServerNameDerived) && !cfg.TLS.InsecureSkipVerify {
 		host, _, err := net.SplitHostPort(cfg.Addr)
 		if err == nil {
 			cfg.TLS.ServerName = host
+			cfg.tlsServerNameDerived = true
 		}
 	}
 

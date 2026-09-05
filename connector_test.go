@@ -65,15 +65,32 @@ func TestBeforeConnectUsesEffectiveTimeout(t *testing.T) {
 }
 
 func TestBeforeConnectUsesEffectiveDialerAndAttributes(t *testing.T) {
+	serverHandshake := []byte(
+		"\x48\x00\x00\x00" + // Packet header: 72-byte payload, sequence 0.
+			"\x0a" + // Protocol version 10.
+			"5.5.8\x00" + // NUL-terminated server version.
+			"\xa5\x00\x00\x00" + // Connection ID 165.
+			"<F?:Dh\"a" + // First 8 bytes of the authentication scramble.
+			"\x00" + // Filler.
+			"\xdf\xf7" + // Lower 2 bytes of the server capability flags.
+			"\x21" + // utf8_general_ci character set.
+			"\x02\x00" + // SERVER_STATUS_AUTOCOMMIT.
+			"\x1f\x80" + // Upper 2 bytes of the server capability flags.
+			"\x15" + // Authentication plugin data length: 21 bytes.
+			"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" + // Reserved.
+			"bxr/UKmc3M2@\x00" + // Remaining authentication scramble.
+			"mysql_native_password", // Authentication plugin name.
+	)
+	okPacket := []byte(
+		"\x07\x00\x00\x02" + // Packet header: 7-byte payload, sequence 2.
+			"\x00" + // OK packet header.
+			"\x00\x00" + // Zero affected rows and last insert ID.
+			"\x02\x00" + // SERVER_STATUS_AUTOCOMMIT.
+			"\x00\x00", // Zero warnings.
+	)
 	mock := &mockConn{
-		data: []byte{72, 0, 0, 0, 10, 53, 46, 53, 46, 56, 0, 165, 0, 0, 0,
-			60, 70, 63, 58, 68, 104, 34, 97, 0, 223, 247, 33, 2, 0, 31, 128, 21, 0,
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 98, 120, 114, 47, 85, 75, 109, 99, 51, 77,
-			50, 64, 0, 109, 121, 115, 113, 108, 95, 110, 97, 116, 105, 118, 101, 95,
-			112, 97, 115, 115, 119, 111, 114, 100},
-		queuedReplies: [][]byte{
-			{7, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0},
-		},
+		data:          serverHandshake,
+		queuedReplies: [][]byte{okPacket},
 	}
 
 	var (

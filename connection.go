@@ -30,7 +30,6 @@ type mysqlConn struct {
 	result           mysqlResult // managed by clearResult() and handleOkPacket().
 	compIO           *compIO
 	cfg              *Config
-	connector        *connector
 	maxAllowedPacket int
 	maxWriteSize     int
 	capabilities     capabilityFlag

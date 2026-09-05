@@ -80,11 +80,12 @@ type Config struct {
 	compress       bool // Enable zlib compression
 	tinyInt1IsBool bool // Treat signed TINYINT(1) as boolean
 
-	beforeConnect func(context.Context, *Config) error // Invoked before a connection is established
-	paramOrder    []string                             // Order of connection parameters parsed from the DSN
-	pubKey        *rsa.PublicKey                       // Server public key
-	timeTruncate  time.Duration                        // Truncate time.Time values to the specified duration
-	charsets      []string                             // Connection charset. When set, this will be set in SET NAMES <charset> query
+	beforeConnect     func(context.Context, *Config) error // Invoked before a connection is established
+	encodedAttributes string                               // Encoded connection attributes
+	paramOrder        []string                             // Order of connection parameters parsed from the DSN
+	pubKey            *rsa.PublicKey                       // Server public key
+	timeTruncate      time.Duration                        // Truncate time.Time values to the specified duration
+	charsets          []string                             // Connection charset. When set, this will be set in SET NAMES <charset> query
 }
 
 // Functional Options Pattern
@@ -146,6 +147,9 @@ func TimeTruncate(d time.Duration) Option {
 }
 
 // BeforeConnect sets the function to be invoked before a connection is established.
+// If the function changes [Config.Addr] while [Config.TLS] is non-nil and its
+// InsecureSkipVerify field is false, it must also update ServerName to match
+// the hostname in the new address.
 func BeforeConnect(fn func(context.Context, *Config) error) Option {
 	return func(cfg *Config) error {
 		cfg.beforeConnect = fn
@@ -263,6 +267,7 @@ func (cfg *Config) normalize() error {
 	if cfg.Logger == nil {
 		cfg.Logger = defaultLogger
 	}
+	cfg.encodedAttributes = encodeConnectionAttributes(cfg)
 
 	return nil
 }

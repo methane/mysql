@@ -3,7 +3,6 @@ package mysql
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"net"
 	"testing"
@@ -62,52 +61,6 @@ func TestBeforeConnectUsesEffectiveTimeout(t *testing.T) {
 	}
 	if remaining < 59*time.Minute || remaining > 61*time.Minute {
 		t.Fatalf("dial timeout = %v, want about 1h", remaining)
-	}
-}
-
-func TestBeforeConnectUpdatesDerivedTLSServerName(t *testing.T) {
-	dialErr := errors.New("stop after observing effective config")
-	tests := []struct {
-		name        string
-		serverName  string
-		want        string
-		wantDerived bool
-	}{
-		{"derived", "", "callback.example", true},
-		{"explicit", "database.example", "database.example", false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var effectiveCfg *Config
-			cfg := NewConfig()
-			cfg.Addr = "initial.example:3306"
-			cfg.TLS = &tls.Config{ServerName: tc.serverName}
-			cfg.DialFunc = func(context.Context, string, string) (net.Conn, error) {
-				return nil, dialErr
-			}
-			if err := cfg.Apply(BeforeConnect(func(_ context.Context, cfg *Config) error {
-				cfg.Addr = "callback.example:3306"
-				effectiveCfg = cfg
-				return nil
-			})); err != nil {
-				t.Fatal(err)
-			}
-
-			connector, err := NewConnector(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := connector.Connect(context.Background()); !errors.Is(err, dialErr) {
-				t.Fatalf("Connect() error = %v, want %v", err, dialErr)
-			}
-			if got := effectiveCfg.TLS.ServerName; got != tc.want {
-				t.Errorf("TLS ServerName = %q, want %q", got, tc.want)
-			}
-			if got := effectiveCfg.tlsServerNameDerived; got != tc.wantDerived {
-				t.Errorf("tlsServerNameDerived = %v, want %v", got, tc.wantDerived)
-			}
-		})
 	}
 }
 

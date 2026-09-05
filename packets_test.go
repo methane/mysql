@@ -97,14 +97,16 @@ var _ net.Conn = new(mockConn)
 func newRWMockConn(sequence uint8) (*mockConn, *mysqlConn) {
 	conn := new(mockConn)
 	cfg := NewConfig()
+	if err := cfg.normalize(); err != nil {
+		panic(err)
+	}
 	mc := &mysqlConn{
-		buf:               newBuffer(),
-		cfg:               cfg,
-		encodedAttributes: encodeConnectionAttributes(cfg),
-		netConn:           conn,
-		closech:           make(chan struct{}),
-		maxAllowedPacket:  defaultMaxAllowedPacket,
-		sequence:          sequence,
+		buf:              newBuffer(),
+		cfg:              cfg,
+		netConn:          conn,
+		closech:          make(chan struct{}),
+		maxAllowedPacket: defaultMaxAllowedPacket,
+		sequence:         sequence,
 	}
 	return conn, mc
 }

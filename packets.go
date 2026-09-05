@@ -405,9 +405,9 @@ func (mc *mysqlConn) writeHandshakeResponsePacket(authResp []byte, plugin string
 
 	// Connection Attributes
 	if mc.capabilities&clientConnectAttrs != 0 {
-		connAttrsLen := len(mc.encodedAttributes)
+		connAttrsLen := len(mc.cfg.encodedAttributes)
 		data = appendLengthEncodedInteger(data, uint64(connAttrsLen))
-		data = append(data, mc.encodedAttributes...)
+		data = append(data, mc.cfg.encodedAttributes...)
 	}
 
 	// Send Auth packet

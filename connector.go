@@ -72,15 +72,17 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err = cfg.normalize(); err != nil {
+			return nil, err
+		}
 	}
 
 	// New mysqlConn
 	mc := &mysqlConn{
-		maxAllowedPacket:  maxPacketSize,
-		maxWriteSize:      maxPacketSize - 1,
-		closech:           make(chan struct{}),
-		cfg:               cfg,
-		encodedAttributes: encodeConnectionAttributes(cfg),
+		maxAllowedPacket: maxPacketSize,
+		maxWriteSize:     maxPacketSize - 1,
+		closech:          make(chan struct{}),
+		cfg:              cfg,
 	}
 	mc.parseTime = mc.cfg.ParseTime
 

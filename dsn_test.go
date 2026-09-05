@@ -33,6 +33,7 @@ func newTestConfig(update func(*Config)) *Config {
 	if update != nil {
 		update(cfg)
 	}
+	cfg.encodedAttributes = encodeConnectionAttributes(cfg)
 	return cfg
 }
 

@@ -10,24 +10,23 @@ import (
 )
 
 func TestConnectorReturnsTimeout(t *testing.T) {
-	connector := newConnector(&Config{
-		Net:     "tcp",
-		Addr:    "1.1.1.1:1234",
-		Timeout: 10 * time.Millisecond,
-	})
-
-	_, err := connector.Connect(context.Background())
-	if err == nil {
-		t.Fatal("error expected")
+	cfg := NewConfig()
+	cfg.Timeout = 10 * time.Millisecond
+	cfg.DialFunc = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("dial context has no deadline")
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	connector, err := NewConnector(cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if nerr, ok := err.(*net.OpError); ok {
-		expected := "dial tcp 1.1.1.1:1234: i/o timeout"
-		if nerr.Error() != expected {
-			t.Fatalf("expected %q, got %q", expected, nerr.Error())
-		}
-	} else {
-		t.Fatalf("expected %T, got %T", nerr, err)
+	_, err = connector.Connect(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Connect() error = %v, want context.DeadlineExceeded", err)
 	}
 }
 

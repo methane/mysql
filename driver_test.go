@@ -2327,51 +2327,32 @@ func TestRejectReadOnly(t *testing.T) {
 }
 
 func TestPing(t *testing.T) {
-	ctx := context.Background()
-	runTests(t, dsn, func(dbt *DBTest) {
-		if err := dbt.db.Ping(); err != nil {
-			dbt.fail("Ping", "Ping", err)
+	conn, mc := newRWMockConn(0)
+	defer mc.cleanup()
+	conn.maxReads = 2
+	conn.queuedReplies = [][]byte{
+		makePacket(1, []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}),
+		makePacket(1, []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}),
+	}
+
+	// A previous command left a result. Ping must clear it without adding
+	// entries for its own OK packet, including on subsequent calls.
+	mc.result.affectedRows = []int64{42}
+	mc.result.insertIds = []int64{7}
+	for range 2 {
+		if err := mc.Ping(context.Background()); err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	runTests(t, dsn, func(dbt *DBTest) {
-		conn, err := dbt.db.Conn(ctx)
-		if err != nil {
-			dbt.fail("db", "Conn", err)
+		if mc.result.affectedRows != nil {
+			t.Errorf("affectedRows = %v, want nil", mc.result.affectedRows)
 		}
-
-		// Check that affectedRows and insertIds are cleared after each call.
-		conn.Raw(func(conn any) error {
-			c := conn.(*mysqlConn)
-
-			// Issue a query that sets affectedRows and insertIds.
-			q, err := c.Query(`SELECT 1`, nil)
-			if err != nil {
-				dbt.fail("Conn", "Query", err)
-			}
-			if got, want := c.result.affectedRows, []int64{0}; !reflect.DeepEqual(got, want) {
-				dbt.Fatalf("bad affectedRows: got %v, want=%v", got, want)
-			}
-			if got, want := c.result.insertIds, []int64{0}; !reflect.DeepEqual(got, want) {
-				dbt.Fatalf("bad insertIds: got %v, want=%v", got, want)
-			}
-			q.Close()
-
-			// Verify that Ping() clears both fields.
-			for range 2 {
-				if err := c.Ping(ctx); err != nil {
-					dbt.fail("Pinger", "Ping", err)
-				}
-				if got, want := c.result.affectedRows, []int64(nil); !reflect.DeepEqual(got, want) {
-					t.Errorf("bad affectedRows: got %v, want=%v", got, want)
-				}
-				if got, want := c.result.insertIds, []int64(nil); !reflect.DeepEqual(got, want) {
-					t.Errorf("bad affectedRows: got %v, want=%v", got, want)
-				}
-			}
-			return nil
-		})
-	})
+		if mc.result.insertIds != nil {
+			t.Errorf("insertIds = %v, want nil", mc.result.insertIds)
+		}
+	}
+	if want := bytes.Repeat(makePacket(0, []byte{comPing}), 2); !bytes.Equal(conn.written, want) {
+		t.Errorf("written packets = %x, want %x", conn.written, want)
+	}
 }
 
 // See Issue #799
@@ -2573,59 +2554,78 @@ func TestMultiResultSet(t *testing.T) {
 }
 
 func TestMultiResultSetNoSelect(t *testing.T) {
-	runTestsWithMultiStatement(t, dsn, func(dbt *DBTest) {
-		rows := dbt.mustQuery("DO 1; DO 2;")
-		defer rows.Close()
+	conn, mc := newRWMockConn(0)
+	defer mc.cleanup()
+	conn.maxReads = 1
+	// Two OK packets: AUTOCOMMIT | MORE_RESULTS_EXISTS, then AUTOCOMMIT.
+	conn.queuedReplies = [][]byte{append(
+		makePacket(1, []byte{0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00}),
+		makePacket(2, []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00})...,
+	)}
 
-		if rows.Next() {
-			dbt.Error("unexpected row")
-		}
-
-		if rows.NextResultSet() {
-			dbt.Error("unexpected next result set")
-		}
-
-		if err := rows.Err(); err != nil {
-			dbt.Error("expected nil; got ", err)
-		}
-	})
+	rows, err := mc.Query("DO 1; DO 2;", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if err := rows.Next(nil); err != io.EOF {
+		t.Errorf("Next() = %v, want io.EOF", err)
+	}
+	next := rows.(driver.RowsNextResultSet)
+	if next.HasNextResultSet() {
+		t.Error("unexpected next result set")
+	}
+	if err := next.NextResultSet(); err != io.EOF {
+		t.Errorf("NextResultSet() = %v, want io.EOF", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mc.result.affectedRows, []int64{0, 0}; !reflect.DeepEqual(got, want) {
+		t.Errorf("affectedRows = %v, want %v", got, want)
+	}
 }
 
 func TestExecMultipleResults(t *testing.T) {
-	ctx := context.Background()
-	runTestsWithMultiStatement(t, dsn, func(dbt *DBTest) {
-		dbt.mustExec(`
-		CREATE TABLE test (
-			id INT NOT NULL AUTO_INCREMENT,
-			value VARCHAR(255),
-			PRIMARY KEY (id)
-		)`)
-		conn, err := dbt.db.Conn(ctx)
-		if err != nil {
-			t.Fatalf("failed to connect: %v", err)
+	conn, mc := newRWMockConn(0)
+	defer mc.cleanup()
+	conn.maxReads = 2
+	// The first statement reports 2 affected rows and insert ID 1;
+	// the second reports 3 affected rows and insert ID 3.
+	conn.queuedReplies = [][]byte{
+		append(
+			makePacket(1, []byte{0x00, 0x02, 0x01, 0x0a, 0x00, 0x00, 0x00}),
+			makePacket(2, []byte{0x00, 0x03, 0x03, 0x02, 0x00, 0x00, 0x00})...,
+		),
+		makePacket(1, []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}),
+	}
+	res, err := mc.Exec("INSERT INTO test VALUES ('a'), ('b'); INSERT INTO test VALUES ('c'), ('d'), ('e');", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := res.RowsAffected(); err != nil || got != 3 {
+		t.Errorf("RowsAffected() = %d, %v; want 3, nil", got, err)
+	}
+	if got, err := res.LastInsertId(); err != nil || got != 3 {
+		t.Errorf("LastInsertId() = %d, %v; want 3, nil", got, err)
+	}
+
+	mres := res.(Result)
+	checkResult := func() {
+		t.Helper()
+		if got, want := mres.AllRowsAffected(), []int64{2, 3}; !reflect.DeepEqual(got, want) {
+			t.Errorf("AllRowsAffected() = %v, want %v", got, want)
 		}
-		conn.Raw(func(conn any) error {
-			//lint:ignore SA1019 this is a test
-			ex := conn.(driver.Execer)
-			res, err := ex.Exec(`
-			INSERT INTO test (value) VALUES ('a'), ('b');
-			INSERT INTO test (value) VALUES ('c'), ('d'), ('e');
-			`, nil)
-			if err != nil {
-				t.Fatalf("insert statements failed: %v", err)
-			}
-			mres := res.(Result)
-			if got, want := mres.AllRowsAffected(), []int64{2, 3}; !reflect.DeepEqual(got, want) {
-				t.Errorf("bad AllRowsAffected: got %v, want=%v", got, want)
-			}
-			// For INSERTs containing multiple rows, LAST_INSERT_ID() returns the
-			// first inserted ID, not the last.
-			if got, want := mres.AllLastInsertIds(), []int64{1, 3}; !reflect.DeepEqual(got, want) {
-				t.Errorf("bad AllLastInsertIds: got %v, want %v", got, want)
-			}
-			return nil
-		})
-	})
+		if got, want := mres.AllLastInsertIds(), []int64{1, 3}; !reflect.DeepEqual(got, want) {
+			t.Errorf("AllLastInsertIds() = %v, want %v", got, want)
+		}
+	}
+	checkResult()
+	// A later command must not overwrite the result already returned.
+	if _, err := mc.Exec("DO 1", nil); err != nil {
+		t.Fatal(err)
+	}
+	checkResult()
 }
 
 // tests if rows are set in a proper state if some results were ignored before
@@ -2650,49 +2650,92 @@ func TestSkipResults(t *testing.T) {
 }
 
 func TestQueryMultipleResults(t *testing.T) {
-	ctx := context.Background()
-	runTestsWithMultiStatement(t, dsn, func(dbt *DBTest) {
-		dbt.mustExec(`
-		CREATE TABLE test (
-			id INT NOT NULL AUTO_INCREMENT,
-			value VARCHAR(255),
-			PRIMARY KEY (id)
-		)`)
-		conn, err := dbt.db.Conn(ctx)
-		if err != nil {
-			t.Fatalf("failed to connect: %v", err)
-		}
-		conn.Raw(func(conn any) error {
-			//lint:ignore SA1019 this is a test
-			qr := conn.(driver.Queryer)
-			c := conn.(*mysqlConn)
+	conn, mc := newRWMockConn(0)
+	defer mc.cleanup()
+	conn.maxReads = 2
+	reply := append(
+		makePacket(1, []byte{0x00, 0x02, 0x01, 0x0a, 0x00, 0x00, 0x00}),
+		makePacket(2, []byte{0x00, 0x03, 0x03, 0x02, 0x00, 0x00, 0x00})...,
+	)
+	conn.queuedReplies = [][]byte{reply, reply}
 
-			// Demonstrate that repeated queries reset the affectedRows
-			for range 2 {
-				_, err := qr.Query(`
-				INSERT INTO test (value) VALUES ('a'), ('b');
-				INSERT INTO test (value) VALUES ('c'), ('d'), ('e');
-			`, nil)
-				if err != nil {
-					t.Fatalf("insert statements failed: %v", err)
-				}
-				if got, want := c.result.affectedRows, []int64{2, 3}; !reflect.DeepEqual(got, want) {
-					t.Errorf("bad affectedRows: got %v, want=%v", got, want)
-				}
-			}
-			return nil
-		})
-	})
+	// Repeated queries must reset both slices instead of accumulating results.
+	for range 2 {
+		rows, err := mc.Query("INSERT INTO test VALUES ('a'), ('b'); INSERT INTO test VALUES ('c'), ('d'), ('e');", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := mc.result.affectedRows, []int64{2, 3}; !reflect.DeepEqual(got, want) {
+			t.Errorf("affectedRows = %v, want %v", got, want)
+		}
+		if got, want := mc.result.insertIds, []int64{1, 3}; !reflect.DeepEqual(got, want) {
+			t.Errorf("insertIds = %v, want %v", got, want)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
-func TestPingContext(t *testing.T) {
-	runTestsParallel(t, dsn, func(dbt *DBTest, _ string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if err := dbt.db.PingContext(ctx); err != context.Canceled {
-			dbt.Errorf("expected context.Canceled, got %v", err)
-		}
-	})
+func TestContextCanceledBeforeConnect(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(context.Context, *sql.DB) error
+	}{
+		{"Ping", func(ctx context.Context, db *sql.DB) error {
+			return db.PingContext(ctx)
+		}},
+		{"Exec", func(ctx context.Context, db *sql.DB) error {
+			_, err := db.ExecContext(ctx, "DO 1")
+			return err
+		}},
+		{"Query", func(ctx context.Context, db *sql.DB) error {
+			rows, err := db.QueryContext(ctx, "SELECT 1")
+			if rows != nil {
+				rows.Close()
+			}
+			return err
+		}},
+		{"Prepare", func(ctx context.Context, db *sql.DB) error {
+			stmt, err := db.PrepareContext(ctx, "SELECT 1")
+			if stmt != nil {
+				stmt.Close()
+			}
+			return err
+		}},
+		{"BeginTx", func(ctx context.Context, db *sql.DB) error {
+			tx, err := db.BeginTx(ctx, nil)
+			if tx != nil {
+				tx.Rollback()
+			}
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dialCalls := 0
+			cfg := NewConfig()
+			cfg.DialFunc = func(context.Context, string, string) (net.Conn, error) {
+				dialCalls++
+				return nil, fmt.Errorf("unexpected dial with canceled context")
+			}
+			connector, err := NewConnector(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db := sql.OpenDB(connector)
+			defer db.Close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := test.call(ctx, db); err != context.Canceled {
+				t.Errorf("error = %v, want context.Canceled", err)
+			}
+			if dialCalls != 0 {
+				t.Errorf("dial calls = %d, want 0", dialCalls)
+			}
+		})
+	}
 }
 
 func TestContextCancelExec(t *testing.T) {
@@ -2813,16 +2856,6 @@ func TestContextCancelQueryRow(t *testing.T) {
 			dbt.Errorf("expected end, but not")
 		}
 		if err := rows.Err(); err != context.Canceled {
-			dbt.Errorf("expected context.Canceled, got %v", err)
-		}
-	})
-}
-
-func TestContextCancelPrepare(t *testing.T) {
-	runTestsParallel(t, dsn, func(dbt *DBTest, _ string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if _, err := dbt.db.PrepareContext(ctx, "SELECT 1"); err != context.Canceled {
 			dbt.Errorf("expected context.Canceled, got %v", err)
 		}
 	})
@@ -3274,11 +3307,15 @@ func TestRowsColumnTypes(t *testing.T) {
 }
 
 func TestValuerWithValueReceiverGivenNilValue(t *testing.T) {
-	runTestsParallel(t, dsn, func(dbt *DBTest, tbl string) {
-		dbt.mustExec("CREATE TABLE " + tbl + " (value VARCHAR(255))")
-		dbt.db.Exec("INSERT INTO "+tbl+" VALUES (?)", (*testValuer)(nil))
-		// This test will panic on the INSERT if ConvertValue() does not check for typed nil before calling Value()
-	})
+	// ConvertValue must recognize a typed nil before invoking a value-receiver
+	// method, which would panic. It must also preserve the SQL NULL value.
+	value, err := converter{}.ConvertValue((*testValuer)(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fatalf("ConvertValue() = %#v, want nil", value)
+	}
 }
 
 // TestRawBytesAreNotModified checks for a race condition that arises when a query context
@@ -3342,29 +3379,64 @@ var _ driver.DriverContext = &MySQLDriver{}
 type dialCtxKey struct{}
 
 func TestConnectorObeysDialTimeouts(t *testing.T) {
-	if !available {
-		t.Skipf("MySQL server not running on %s", netAddr)
-	}
+	for _, parentTimeout := range []time.Duration{0, time.Hour} {
+		t.Run(parentTimeout.String(), func(t *testing.T) {
+			const address = "server.invalid:3306"
+			const dialTimeout = 2 * time.Hour
+			dialErr := fmt.Errorf("stop after observing the dial context")
+			var dialDeadline time.Time
+			dialCalls := 0
+			network := strings.ReplaceAll(t.Name(), "/", "_")
+			RegisterDialContext(network, func(ctx context.Context, addr string) (net.Conn, error) {
+				dialCalls++
+				if addr != address {
+					t.Errorf("dial address = %q, want %q", addr, address)
+				}
+				if ctx.Value(dialCtxKey{}) != true {
+					t.Error("query context value was not propagated to the dialer")
+				}
+				var ok bool
+				dialDeadline, ok = ctx.Deadline()
+				if !ok {
+					t.Error("dial context has no deadline")
+				}
+				return nil, dialErr
+			})
+			defer DeregisterDialContext(network)
 
-	RegisterDialContext("dialctxtest", func(ctx context.Context, addr string) (net.Conn, error) {
-		var d net.Dialer
-		if !ctx.Value(dialCtxKey{}).(bool) {
-			return nil, fmt.Errorf("test error: query context is not propagated to our dialer")
-		}
-		return d.DialContext(ctx, prot, addr)
-	})
+			cfg := NewConfig()
+			cfg.Net = network
+			cfg.Addr = address
+			cfg.Timeout = dialTimeout
+			db, err := sql.Open(driverNameTest, cfg.FormatDSN())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			ctx := context.WithValue(context.Background(), dialCtxKey{}, true)
+			if parentTimeout != 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, parentTimeout)
+				defer cancel()
+			}
 
-	db, err := sql.Open(driverNameTest, fmt.Sprintf("%s:%s@dialctxtest(%s)/%s?timeout=30s", user, pass, addr, dbname))
-	if err != nil {
-		t.Fatalf("error connecting: %s", err.Error())
-	}
-	defer db.Close()
-
-	ctx := context.WithValue(context.Background(), dialCtxKey{}, true)
-
-	_, err = db.ExecContext(ctx, "DO 1")
-	if err != nil {
-		t.Fatal(err)
+			before := time.Now()
+			_, err = db.ExecContext(ctx, "DO 1")
+			after := time.Now()
+			if err != dialErr {
+				t.Fatalf("ExecContext() error = %v, want %v", err, dialErr)
+			}
+			if dialCalls != 1 {
+				t.Fatalf("dial calls = %d, want 1", dialCalls)
+			}
+			if parentDeadline, ok := ctx.Deadline(); ok {
+				if !dialDeadline.Equal(parentDeadline) {
+					t.Errorf("dial deadline = %v, want parent deadline %v", dialDeadline, parentDeadline)
+				}
+			} else if dialDeadline.Before(before.Add(dialTimeout)) || dialDeadline.After(after.Add(dialTimeout)) {
+				t.Errorf("dial deadline = %v, want between %v and %v", dialDeadline, before.Add(dialTimeout), after.Add(dialTimeout))
+			}
+		})
 	}
 }
 

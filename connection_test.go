@@ -137,28 +137,66 @@ func TestCheckNamedValue(t *testing.T) {
 // TestCleanCancel tests passed context is cancelled at start.
 // No packet should be sent.  Connection should keep current status.
 func TestCleanCancel(t *testing.T) {
-	mc := &mysqlConn{
-		closech: make(chan struct{}),
+	tests := []struct {
+		name string
+		call func(context.Context, *mysqlConn) error
+	}{
+		{"Ping", func(ctx context.Context, mc *mysqlConn) error {
+			return mc.Ping(ctx)
+		}},
+		{"Exec", func(ctx context.Context, mc *mysqlConn) error {
+			_, err := mc.ExecContext(ctx, "DO 1", nil)
+			return err
+		}},
+		{"Query", func(ctx context.Context, mc *mysqlConn) error {
+			_, err := mc.QueryContext(ctx, "SELECT 1", nil)
+			return err
+		}},
+		{"Prepare", func(ctx context.Context, mc *mysqlConn) error {
+			_, err := mc.PrepareContext(ctx, "SELECT 1")
+			return err
+		}},
+		{"BeginTx", func(ctx context.Context, mc *mysqlConn) error {
+			_, err := mc.BeginTx(ctx, driver.TxOptions{})
+			return err
+		}},
+		{"StmtExec", func(ctx context.Context, mc *mysqlConn) error {
+			stmt := &mysqlStmt{mc: mc}
+			_, err := stmt.ExecContext(ctx, nil)
+			return err
+		}},
+		{"StmtQuery", func(ctx context.Context, mc *mysqlConn) error {
+			stmt := &mysqlStmt{mc: mc}
+			_, err := stmt.QueryContext(ctx, nil)
+			return err
+		}},
 	}
-	mc.startWatcher()
-	defer mc.cleanup()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn, mc := newRWMockConn(0)
+			// Bound unexpected reads so a regression fails instead of hanging
+			// on an empty mock connection.
+			conn.maxReads = 1
+			mc.startWatcher()
+			defer mc.cleanup()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	for range 3 { // Repeat same behavior
-		err := mc.Ping(ctx)
-		if err != context.Canceled {
-			t.Errorf("expected context.Canceled, got %#v", err)
-		}
-
-		if mc.closed.Load() {
-			t.Error("expected mc is not closed, closed actually")
-		}
-
-		if mc.watching {
-			t.Error("expected watching is false, but true")
-		}
+			for range 3 {
+				if err := test.call(ctx, mc); err != context.Canceled {
+					t.Errorf("error = %v, want context.Canceled", err)
+				}
+				if mc.closed.Load() {
+					t.Error("connection was closed")
+				}
+				if mc.watching {
+					t.Error("connection is still watching the canceled context")
+				}
+			}
+			if conn.reads != 0 || conn.writes != 0 {
+				t.Errorf("network I/O: %d reads, %d writes; want none", conn.reads, conn.writes)
+			}
+		})
 	}
 }
 

@@ -75,13 +75,8 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		cfg.encodedAttributes = encodeConnectionAttributes(cfg)
 	}
 
-	if cfg.openIDConnect {
-		if cfg.openIDToken == "" {
-			return nil, ErrOpenIDConnectToken
-		}
-		if cfg.TLS == nil {
-			return nil, ErrOpenIDConnectTLS
-		}
+	if cfg.openIDToken != "" && cfg.TLS == nil {
+		return nil, ErrOpenIDConnectTLS
 	}
 
 	// New mysqlConn
@@ -149,7 +144,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 
 	// OIDC is selected by the application, never by the server greeting.
 	var authResp []byte
-	if cfg.openIDConnect {
+	if cfg.openIDToken != "" {
 		plugin = openIDConnectPlugin
 		if serverCapabilities&(clientPluginAuth|clientPluginAuthLenEncClientData) != clientPluginAuth|clientPluginAuthLenEncClientData {
 			mc.cleanup()

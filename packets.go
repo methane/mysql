@@ -217,7 +217,7 @@ func (mc *mysqlConn) readHandshakePacket() (data []byte, capabilities capability
 		return nil, capabilities, 0, "", ErrOldProtocol
 	}
 	if capabilities&clientSSL == 0 && mc.cfg.TLS != nil {
-		if mc.cfg.AllowFallbackToPlaintext {
+		if mc.cfg.AllowFallbackToPlaintext && !mc.cfg.openIDConnect {
 			mc.cfg.TLS = nil
 		} else {
 			return nil, capabilities, 0, "", ErrNoTLS
@@ -384,6 +384,15 @@ func (mc *mysqlConn) writeHandshakeResponsePacket(authResp []byte, plugin string
 		mc.netConn = tlsConn
 	}
 
+	if mc.cfg.openIDConnect {
+		// TLS configuration and downgrade checks happen before this point.
+		// The application's TLS verification policy has now succeeded.
+		if mc.cfg.TLS == nil {
+			return ErrOpenIDConnectTLS
+		}
+		authResp = appendLengthEncodedString([]byte{1}, mc.cfg.openIDToken)
+	}
+
 	// User [null terminated string]
 	if len(mc.cfg.User) > 0 {
 		data = append(data, mc.cfg.User...)
@@ -512,9 +521,15 @@ func (mc *mysqlConn) readAuthResult() ([]byte, string, error) {
 		return nil, "", mc.resultUnchanged().handleOkPacket(data)
 
 	case iAuthMoreData:
+		if mc.cfg.openIDConnect {
+			return nil, "", ErrMalformPkt
+		}
 		return data[1:], "", err
 
 	case iEOF:
+		if mc.cfg.openIDConnect {
+			return nil, "", ErrOpenIDConnectSwitch
+		}
 		if len(data) == 1 {
 			// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_old_auth_switch_request.html
 			return nil, "mysql_old_password", nil

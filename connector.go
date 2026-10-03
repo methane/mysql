@@ -75,6 +75,15 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		cfg.encodedAttributes = encodeConnectionAttributes(cfg)
 	}
 
+	if cfg.openIDConnect {
+		if cfg.openIDToken == "" {
+			return nil, ErrOpenIDConnectToken
+		}
+		if cfg.TLS == nil {
+			return nil, ErrOpenIDConnectTLS
+		}
+	}
+
 	// New mysqlConn
 	mc := &mysqlConn{
 		maxAllowedPacket: maxPacketSize,
@@ -138,16 +147,26 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		plugin = defaultAuthPlugin
 	}
 
-	// Send Client Authentication Packet
-	authResp, err := mc.auth(authData, plugin)
-	if err != nil {
-		// try the default auth plugin, if using the requested plugin failed
-		mc.cfg.Logger.Print("could not use requested auth plugin '"+plugin+"': ", err.Error())
-		plugin = defaultAuthPlugin
+	// OIDC is selected by the application, never by the server greeting.
+	var authResp []byte
+	if cfg.openIDConnect {
+		plugin = openIDConnectPlugin
+		if serverCapabilities&(clientPluginAuth|clientPluginAuthLenEncClientData) != clientPluginAuth|clientPluginAuthLenEncClientData {
+			mc.cleanup()
+			return nil, ErrOpenIDConnectCapabilities
+		}
+		// Construct the bearer-token response only after TLS verification.
+	} else {
 		authResp, err = mc.auth(authData, plugin)
 		if err != nil {
-			mc.cleanup()
-			return nil, err
+			// try the default auth plugin, if using the requested plugin failed
+			mc.cfg.Logger.Print("could not use requested auth plugin '"+plugin+"': ", err.Error())
+			plugin = defaultAuthPlugin
+			authResp, err = mc.auth(authData, plugin)
+			if err != nil {
+				mc.cleanup()
+				return nil, err
+			}
 		}
 	}
 	mc.initCapabilities(serverCapabilities, serverExtCapabilities)

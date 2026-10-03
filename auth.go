@@ -17,6 +17,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"strings"
 	"sync"
 
 	"filippo.io/edwards25519"
@@ -347,6 +348,13 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 	// Read Result Packet
 	authData, newPlugin, err := mc.readAuthResult()
 	if err != nil {
+		if mc.cfg.openIDConnect && mc.cfg.openIDToken != "" {
+			// Authentication errors may echo a rejected credential. Preserve
+			// the server error code without exposing the bearer token.
+			if serverErr, ok := err.(*MySQLError); ok {
+				serverErr.Message = strings.ReplaceAll(serverErr.Message, mc.cfg.openIDToken, "[redacted]")
+			}
+		}
 		return err
 	}
 

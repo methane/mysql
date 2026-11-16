@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Discard connections after a failed `LOAD DATA LOCAL INFILE`, including reader
+  `Close()` errors, so unread results from a multi-statement batch cannot be
+  returned to a later caller. Preserve the server's response status and avoid
+  retrying the batch after an upload write failure.
+
 * Reject `interpolateParams=true` combined with an unsafe multibyte charset
   (`big5`, `sjis`, `gbk`, `cp932`, `gb18030`) given by `charset` or `Charset()`.
   Previously only `collation` was checked. Collations are now matched
